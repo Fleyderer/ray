@@ -309,7 +309,7 @@ class TuneBOHB(Searcher):
                         lower = math.ceil(domain.lower / quantize) * quantize
                         upper = math.floor(domain.upper / quantize) * quantize
                     return ConfigSpace.UniformFloatHyperparameter(
-                        par, lower=lower, upper=upper, q=quantize, log=True
+                        par, lower=lower, upper=upper, log=True
                     )
                 elif isinstance(sampler, Uniform):
                     lower = domain.lower
@@ -318,7 +318,7 @@ class TuneBOHB(Searcher):
                         lower = math.ceil(domain.lower / quantize) * quantize
                         upper = math.floor(domain.upper / quantize) * quantize
                     return ConfigSpace.UniformFloatHyperparameter(
-                        par, lower=lower, upper=upper, q=quantize, log=False
+                        par, lower=lower, upper=upper, log=False
                     )
                 elif isinstance(sampler, Normal):
                     return ConfigSpace.hyperparameters.NormalFloatHyperparameter(
