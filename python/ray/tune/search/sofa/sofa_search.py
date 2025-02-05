@@ -38,6 +38,18 @@ class TrialInfo:
         return self.__str__()
 
 
+class TrialInfo:
+    def __init__(self, config: dict, score: float):
+        self.config = config
+        self.score = score
+
+    def __str__(self):
+        return f"TrialInfo(config={self.config}, score={self.score})"
+
+    def __repr__(self):
+        return self.__str__()
+
+
 class DomainInfo:
     def __init__(self,
                  bounds: tuple[float, float], type_: str,
@@ -474,6 +486,15 @@ class SoFASearch(Searcher):
         
         if running_cnt >= self._population_size:
             # print(f"CANT SUGGEST: {running_cnt} >= {self._population_size}")
+
+        print("ID:", trial_id, "LIVE TRIALS:", len(self._live_trials),
+              "POINTS TO EVAL:", len(self._points_to_evaluate))
+        
+        max_concurrent = (
+            self._max_concurrent if self._max_concurrent > 0 else float("inf")
+        )
+
+        if len(self._live_trials) >= max_concurrent:
             return None
         
         # print("ID:", trial_id, "TRIALS CNT:", len(self._trials))
