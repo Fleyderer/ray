@@ -486,9 +486,7 @@ class SoFASearch(Searcher):
         
         if running_cnt >= self._population_size:
             # print(f"CANT SUGGEST: {running_cnt} >= {self._population_size}")
-
-        print("ID:", trial_id, "LIVE TRIALS:", len(self._live_trials),
-              "POINTS TO EVAL:", len(self._points_to_evaluate))
+            return None
         
         max_concurrent = (
             self._max_concurrent if self._max_concurrent > 0 else float("inf")
