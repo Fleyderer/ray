@@ -18,6 +18,18 @@ from ray.tune.experiment import Trial
 logger = logging.getLogger(__name__)
 
 
+class TrialInfo:
+    def __init__(self, config: dict, score: float):
+        self.config = config
+        self.score = score
+
+    def __str__(self):
+        return f"TrialInfo(config={self.config}, score={self.score})"
+
+    def __repr__(self):
+        return self.__str__()
+
+
 class DomainInfo:
     def __init__(self,
                  bounds: tuple[float, float], type_: str,
@@ -436,8 +448,7 @@ class SoFASearch(Searcher):
         """Suggest a new configuration to try."""
 
         print("ID:", trial_id, "LIVE TRIALS:", len(self._live_trials),
-              "POINTS TO EVAL:", len(self._points_to_evaluate),
-              )
+              "POINTS TO EVAL:", len(self._points_to_evaluate))
         
         max_concurrent = (
             self._max_concurrent if self._max_concurrent > 0 else float("inf")
