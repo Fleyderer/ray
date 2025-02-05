@@ -18,6 +18,26 @@ from ray.tune.experiment import Trial
 logger = logging.getLogger(__name__)
 
 
+class TrialState:
+    NOOP = "NOOP"
+    RUNNING = "RUNNING"
+    COMPLETED = "COMPLETED"
+
+
+class TrialInfo:
+    def __init__(self, trial_id, config: dict, score: float, state: str = TrialState.NOOP):
+        self.trial_id = trial_id
+        self.config = config
+        self.score = score
+        self.state = state
+
+    def __str__(self):
+        return f"TrialInfo(trial_id={self.trial_id}, config={self.config}, score={self.score}, state={self.state})"
+
+    def __repr__(self):
+        return self.__str__()
+
+
 class DomainInfo:
     def __init__(self,
                  bounds: tuple[float, float], type_: str,
@@ -41,7 +61,7 @@ class SoFASearch(Searcher):
         space: Optional[dict[str, Domain]] = None,
         metric: Optional[str] = None,
         mode: str = "max",
-        population_size: int = 20,
+        population_size: int = 100,
         max_iter_num: int = 1000,
         mutation_rate: Union[float, tuple[float, float]] = (0.5, 1.0),
         cross_over_rate: Union[float, tuple[float, float]] = (0.5, 1.0),
@@ -58,7 +78,6 @@ class SoFASearch(Searcher):
             space: A dictionary mapping parameter names to search spaces.
             metric: The name of the metric to optimize.
             mode: Whether to optimize a minimization or maximization problem.
-            population_size: The number of individuals in the population.
             mutation_rate: The probability of mutating an individual.
             cross_over_rate: The probability of crossing over two individuals. 
                 Used for nominal categorical parameters.
@@ -78,6 +97,7 @@ class SoFASearch(Searcher):
 
         super(SoFASearch, self).__init__(metric=metric, mode=mode)
         self._population_size = population_size
+        self._population_to_initialize = population_size
         self._max_iter_num = max_iter_num
         self._distance_eps = distance_eps
         self._use_lambda = use_lambda
@@ -103,10 +123,14 @@ class SoFASearch(Searcher):
         self._space = space
 
         # Internal state
-        self._live_trials: dict[str, dict] = {}  # trial_id -> config
-        self._trial_scores: dict[str, float] = {}  # trial_id -> score
-        self._best_config: Optional[dict] = None
-        self._best_score = float('-inf') if mode == "max" else float('inf')
+        # self._live_trials: dict[str, dict] = {}  # trial_id -> config
+        # self._trial_scores: dict[str, float] = {}  # trial_id -> score
+        # self._best_config: Optional[dict] = None
+        # self._best_score = float('-inf') if mode == "max" else float('inf')
+
+        self._trials: dict[str, TrialInfo] = {}  # trial_id -> (config, score)
+        self._best_trial: TrialInfo = TrialInfo(
+            None, None, float('-inf') if mode == "max" else float('inf'))
 
         if points_to_evaluate:
             self._points_to_evaluate = points_to_evaluate
@@ -114,20 +138,15 @@ class SoFASearch(Searcher):
             self._points_to_evaluate = []
 
         self._max_concurrent = max_concurrent
+        self._iter_num = 0
+
+    
+    def _trials_by_state(self, state: str) -> list[TrialInfo]:
+        return [t for t in self._trials.values() if t.state == state]
 
     def set_max_concurrency(self, max_concurrent: int) -> bool:
         self._max_concurrent = max_concurrent
         return True
-
-    def sample_config(self):
-        config = {}
-        for param, domain in self._original_space.items():
-            if isinstance(domain, Domain):
-                config[param] = domain.sample()
-            else:
-                config[param] = domain
-
-        return config
 
     @staticmethod
     def _handle_rate(rate: Union[float, tuple[float, float]]):
@@ -254,10 +273,6 @@ class SoFASearch(Searcher):
         elif self._mode == "min":
             self._metric_op = -1.0
 
-        while len(self._points_to_evaluate) < self._population_size:
-            # For initial population, sample randomly from space
-            self._points_to_evaluate.append(self.sample_config())
-
         return True
 
     def _normalize(self, config: dict) -> dict:
@@ -340,11 +355,12 @@ class SoFASearch(Searcher):
         )
         trial_probs = [config_probs[trial_id] for trial_id in trial_ids]
 
+        # Extract configs and normalize
         normalized_configs = [
-            self._normalize(self._live_trials[trial_id])
+            self._normalize(self._trials[trial_id].config)
             for trial_id in trial_ids]
 
-        config_keys = self._best_config.keys()
+        config_keys = self._best_trial.config.keys()
         config_keys = [key for key in config_keys if self._is_normalizing(key)]
 
         configs_values = [
@@ -352,19 +368,18 @@ class SoFASearch(Searcher):
             for normalized_config in normalized_configs
         ]
 
-        normalized_best_config = self._normalize(self._best_config)
+        normalized_best_config = self._normalize(self._best_trial.config)
         best_values = np.array([normalized_best_config[key]
                                for key in config_keys])
 
         mutated_values = \
             configs_values[0] + \
             mutation_rate * (best_values - configs_values[0]) + \
-            mutation_rate * \
-            (configs_values[1] - configs_values[2])
+            mutation_rate * (configs_values[1] - configs_values[2])
 
         mutated_config = dict(zip(config_keys, mutated_values))
 
-        # Handle non-normalized parameters, choising values
+        # Handle non-normalized parameters, choosing values
         # from trials according to their probabilities
         for key in normalized_best_config.keys():
             if key not in config_keys:
@@ -372,24 +387,26 @@ class SoFASearch(Searcher):
                     trial_ids,
                     p=trial_probs
                 )
-                mutated_config[key] = self._live_trials[trial_id][key]
+                mutated_config[key] = self._trials[trial_id][key]
 
         return self._denormalize(mutated_config)
 
-    def _calculate_epsilon(self, iterations_count: int) -> float:
+    def _calculate_epsilon(self) -> float:
         """Calculate epsilon sequence value."""
-        return max(0.1, 1 - iterations_count / self._max_iter_num)
+        return max(0.1, 1 - self._iter_num / self._max_iter_num)
 
-    def _calculate_lambda(self, iterations_count: int) -> float:
+    def _calculate_lambda(self) -> float:
         """Calculate adaptive lambda parameter."""
-        return (np.sqrt(iterations_count / 100) + 1)
+        return (np.sqrt(self._iter_num / 100) + 1)
 
     def _calculate_selection_probabilities(self) -> dict:
         """Calculate selection probabilities using SoFA formula."""
-        trials_count = len(self._trial_scores)
-        lambda_val = self._calculate_lambda(
-            trials_count) if self._use_lambda else 1
-        scores = np.array(list(self._trial_scores.values()))
+        lambda_val = self._calculate_lambda() if self._use_lambda else 1
+
+        # Filter out trials without scores
+        trial_ids, scores = zip(
+            *[(t.trial_id, t.score) for t in self._trials.values()
+              if t.score is not None])
 
         if self._mode == "max":
             probs = np.power(scores, lambda_val)
@@ -397,16 +414,30 @@ class SoFASearch(Searcher):
             probs = np.power(1.0 / (scores + 1e-10), lambda_val)
 
         probs = probs / np.sum(probs)
-        return dict(zip(self._trial_scores.keys(), probs))
+        return dict(zip(trial_ids, probs))
 
-    def _generate_new_config(self, reference_config: dict, epsilon: float) -> dict:
+    def _sample_new_config(self) -> dict:
+        """Sample new config from search space."""
+        config = {}
+        for param, domain in self._original_space.items():
+            if isinstance(domain, Domain):
+                config[param] = domain.sample()
+            else:
+                config[param] = domain
+
+        return config
+
+    def _generate_new_config(self, reference_config: dict) -> dict:
         """Generate new config using SoFA's probability distribution."""
         normalized_ref = self._normalize(reference_config)
-        keys = [key for key in normalized_ref.keys() if self._is_normalizing(key)]
 
+        epsilon = self._calculate_epsilon() if self._use_epsilon else 1
+        
+        keys = [key for key in normalized_ref.keys() if self._is_normalizing(key)]
         values = np.array([normalized_ref[key] for key in keys], dtype=float)
 
         y = np.random.random(size=values.shape)
+
         new_values = np.tan(
             y * np.arctan((1.0 - values)/epsilon) +
             (1 - y) * np.arctan((-1.0 - values)/epsilon)
@@ -434,89 +465,125 @@ class SoFASearch(Searcher):
 
     def suggest(self, trial_id: str) -> Optional[dict]:
         """Suggest a new configuration to try."""
-
-        print("ID:", trial_id, "LIVE TRIALS:", len(self._live_trials),
-              "POINTS TO EVAL:", len(self._points_to_evaluate),
-              )
         
-        max_concurrent = (
-            self._max_concurrent if self._max_concurrent > 0 else float("inf")
-        )
+        running_cnt = len(self._trials_by_state(TrialState.RUNNING))
 
-        if len(self._live_trials) >= max_concurrent:
+        if (self._max_concurrent > 0 and running_cnt >= self._max_concurrent):
+            # print(f"AAA CANT SUGGEST: {running_cnt} >= {self._population_size}")
             return None
-
-        if self._points_to_evaluate:
-            config = self._points_to_evaluate.pop(0)
-            self._live_trials[trial_id] = config
-            return config
-
-        # Calculate selection probabilities
-        selection_probs = self._calculate_selection_probabilities()
-
-        if len(selection_probs) == 0:
+        
+        if running_cnt >= self._population_size:
+            # print(f"CANT SUGGEST: {running_cnt} >= {self._population_size}")
             return None
+        
+        # print("ID:", trial_id, "TRIALS CNT:", len(self._trials))
 
-        # Get reference configuration
-        reference_config = None
-        if self._use_mutation and self._best_config is not None:
-            reference_config = self._mutate(selection_probs)
+        # Create config for initial population
+        if self._population_to_initialize > 0:
 
-        if not reference_config:
-            reference_trial_id = np.random.choice(
-                list(selection_probs.keys()),
-                p=list(selection_probs.values())
-            )
-            reference_config = self._live_trials[reference_trial_id]
+            # print("INITIALIZE PENDING:", self._population_to_initialize)
 
-        # Generate new configuration
-        epsilon = self._calculate_epsilon(
-            len(self._trial_scores)) if self._use_epsilon else 1
-        new_config = self._generate_new_config(reference_config, epsilon)
+            self._population_to_initialize -= 1
 
-        self._live_trials[trial_id] = new_config
+            if self._points_to_evaluate:
+                new_config = self._points_to_evaluate.pop(0)
+            else:
+                new_config = self._sample_new_config()
+        
+        else:
+
+            self._iter_num += 1
+
+            # Calculate selection probabilities
+            selection_probs = self._calculate_selection_probabilities()
+
+            if len(selection_probs) == 0:
+                return None
+            
+            # print("NEW SUGGESTION, ITER:", self._iter_num)
+
+            # Get reference configuration
+            reference_config = None
+            if self._use_mutation and self._best_trial.score is not None:
+                reference_config = self._mutate(selection_probs)
+
+            if not reference_config:
+                reference_trial_id = np.random.choice(
+                    list(selection_probs.keys()),
+                    p=list(selection_probs.values())
+                )
+                reference_config = self._trials[reference_trial_id].config
+
+            # Generate new configuration
+            new_config = self._generate_new_config(reference_config)
+
+        self._trials[trial_id] = TrialInfo(trial_id, new_config, 
+                                           None, TrialState.RUNNING)
+
         return new_config
-    
+
     def on_trial_result(self, trial_id: str, result: dict):
         """Update the searcher with the latest trial result."""
         score = result.get(self._metric)
         if score is None:
             return
 
-        current_score = self._trial_scores.get(trial_id)
+        current_score = self._trials.get(trial_id).score
         # Update the trial's best score so far
         if current_score is None:
-            self._trial_scores[trial_id] = score
+            self._trials[trial_id].score = score
         else:
             if (self._mode == "max" and score > current_score) or \
-            (self._mode == "min" and score < current_score):
-                self._trial_scores[trial_id] = score
+                    (self._mode == "min" and score < current_score):
+                self._trials[trial_id].score = score
 
-        # Update the global best score and config
-        if (self._mode == "max" and score > self._best_score) or \
-        (self._mode == "min" and score < self._best_score):
-            self._best_score = score
-            self._best_config = self._live_trials.get(trial_id)
+        trial = TrialInfo(trial_id, self._trials.get(trial_id).config, score)
+
+        # Update the global best and worst score and config
+        if self._mode == "max":
+            if score > self._best_trial.score:
+                self._best_trial = trial
+        else:
+            if score < self._best_trial.score:
+                self._best_trial = trial
 
     def on_trial_complete(self, trial_id: str, result: Optional[dict] = None, error: bool = False):
         """Handle completed trial result."""
         if error or result is None:
-            self._live_trials.pop(trial_id, None)
-            self._trial_scores.pop(trial_id, None)
+            self._trials.pop(trial_id, None)
+            self._trials.pop(trial_id, None)
             return
 
         score = result.get(self._metric)
         if score is None:
             return
+        
+        # print("TRIAL COMPLETED. COUNT OF COMPLETED:", len(self._trials_by_state(TrialState.COMPLETED)))
 
-        self._trial_scores[trial_id] = score
+        self._trials[trial_id].state = TrialState.COMPLETED
+        self._trials[trial_id].score = score
 
-        # Update best score
+        trial = TrialInfo(trial_id, self._trials.get(trial_id).config, score)
+
+        # Update best and worst score
         if self._mode == "max":
-            if score > self._best_score:
-                self._best_score = score
-                self._best_config = self._live_trials[trial_id]
+            if score > self._best_trial.score:
+                self._best_trial = trial
         else:
-            if score < self._best_score:
-                self._best_score = score
-                self._best_config = self._live_trials[trial_id]
+            if score < self._best_trial.score:
+                self._best_trial = trial
+
+        self.clean_up()
+
+    def clean_up(self):
+        completed = self._trials_by_state(TrialState.COMPLETED)
+
+        if len(completed) == 0 or len(completed) < self._population_size:
+            return
+        
+        if self._mode == "max":
+            worst = min(completed, key=lambda t: t.score)
+        elif self._mode == "min":
+            worst = max(completed, key=lambda t: t.score)
+
+        self._trials.pop(worst.trial_id, None)
