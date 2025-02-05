@@ -61,7 +61,8 @@ class SoFASearch(Searcher):
         space: Optional[dict[str, Domain]] = None,
         metric: Optional[str] = None,
         mode: str = "max",
-        population_size: int = 100,
+        initial_population_size: int = 10,
+        max_population_size: int = 100,
         max_iter_num: int = 1000,
         mutation_rate: Union[float, tuple[float, float]] = (0.5, 1.0),
         cross_over_rate: Union[float, tuple[float, float]] = (0.5, 1.0),
@@ -96,8 +97,8 @@ class SoFASearch(Searcher):
             "min", "max"], f"`mode` must be 'min' or 'max', got '{mode}'"
 
         super(SoFASearch, self).__init__(metric=metric, mode=mode)
-        self._population_size = population_size
-        self._population_to_initialize = population_size
+        self._max_population_size = max_population_size
+        self._population_to_initialize = initial_population_size
         self._max_iter_num = max_iter_num
         self._distance_eps = distance_eps
         self._use_lambda = use_lambda
@@ -403,10 +404,14 @@ class SoFASearch(Searcher):
         """Calculate selection probabilities using SoFA formula."""
         lambda_val = self._calculate_lambda() if self._use_lambda else 1
 
+        ids_scores = [(t.trial_id, t.score) for t in self._trials.values()
+                      if t.score is not None]
+        
+        if len(ids_scores) == 0:
+            return {}
+
         # Filter out trials without scores
-        trial_ids, scores = zip(
-            *[(t.trial_id, t.score) for t in self._trials.values()
-              if t.score is not None])
+        trial_ids, scores = zip(*ids_scores)
 
         if self._mode == "max":
             probs = np.power(scores, lambda_val)
@@ -432,7 +437,7 @@ class SoFASearch(Searcher):
         normalized_ref = self._normalize(reference_config)
 
         epsilon = self._calculate_epsilon() if self._use_epsilon else 1
-        
+
         keys = [key for key in normalized_ref.keys() if self._is_normalizing(key)]
         values = np.array([normalized_ref[key] for key in keys], dtype=float)
 
@@ -469,19 +474,17 @@ class SoFASearch(Searcher):
         running_cnt = len(self._trials_by_state(TrialState.RUNNING))
 
         if (self._max_concurrent > 0 and running_cnt >= self._max_concurrent):
-            # print(f"AAA CANT SUGGEST: {running_cnt} >= {self._population_size}")
+            # print(f"AAA CANT SUGGEST: {running_cnt} >= {self._max_population_size}")
             return None
         
-        if running_cnt >= self._population_size:
-            # print(f"CANT SUGGEST: {running_cnt} >= {self._population_size}")
-            return None
-        
-        # print("ID:", trial_id, "TRIALS CNT:", len(self._trials))
+        # if running_cnt >= self._max_population_size:
+        #     # print(f"CANT SUGGEST: {running_cnt} >= {self._max_population_size}")
+        #     return None
 
         # Create config for initial population
         if self._population_to_initialize > 0:
 
-            # print("INITIALIZE PENDING:", self._population_to_initialize)
+            print("INITIALIZE PENDING:", self._population_to_initialize)
 
             self._population_to_initialize -= 1
 
@@ -500,7 +503,7 @@ class SoFASearch(Searcher):
             if len(selection_probs) == 0:
                 return None
             
-            # print("NEW SUGGESTION, ITER:", self._iter_num)
+            print("NEW SUGGESTION, ITER:", self._iter_num)
 
             # Get reference configuration
             reference_config = None
@@ -516,6 +519,8 @@ class SoFASearch(Searcher):
 
             # Generate new configuration
             new_config = self._generate_new_config(reference_config)
+
+        print("ID:", trial_id, "TRIALS CNT:", len(self._trials))
 
         self._trials[trial_id] = TrialInfo(trial_id, new_config, 
                                            None, TrialState.RUNNING)
@@ -558,7 +563,7 @@ class SoFASearch(Searcher):
         if score is None:
             return
         
-        # print("TRIAL COMPLETED. COUNT OF COMPLETED:", len(self._trials_by_state(TrialState.COMPLETED)))
+        print("TRIAL COMPLETED. COUNT OF COMPLETED:", len(self._trials_by_state(TrialState.COMPLETED)))
 
         self._trials[trial_id].state = TrialState.COMPLETED
         self._trials[trial_id].score = score
@@ -578,7 +583,7 @@ class SoFASearch(Searcher):
     def clean_up(self):
         completed = self._trials_by_state(TrialState.COMPLETED)
 
-        if len(completed) == 0 or len(completed) < self._population_size:
+        if len(completed) == 0 or len(completed) < self._max_population_size:
             return
         
         if self._mode == "max":
