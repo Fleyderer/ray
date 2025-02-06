@@ -32,11 +32,9 @@ class TrialInfo:
         self.score = score
         self.state = state
 
-    def __str__(self):
-        return f"TrialInfo(trial_id={self.trial_id}, config={self.config}, score={self.score}, state={self.state})"
-
-    def __repr__(self):
-        return self.__str__()
+    def __repr__(self) -> str:
+        return (f"TrialInfo(trial_id={self.trial_id}, config={self.config}, "
+                f"score={self.score}, state={self.state})")
 
 
 class DomainInfo:
@@ -47,11 +45,8 @@ class DomainInfo:
         self.type = type_
         self.encoding = encoded_categories
 
-    def __str__(self):
+    def __repr__(self) -> str:
         return f"DomainInfo(bounds={self.bounds}, type={self.type}, encoding={self.encoding})"
-
-    def __repr__(self):
-        return self.__str__()
 
 
 class SoFASearch(Searcher):
@@ -96,7 +91,7 @@ class SoFASearch(Searcher):
 
         assert mode in ["min", "max"], \
             f"`mode` must be 'min' or 'max', got '{mode}'"
-        
+
         assert removal_ratio < 1.0, \
             f"`removal_ratio` must be < 1.0, got {removal_ratio}"
 
@@ -144,7 +139,6 @@ class SoFASearch(Searcher):
         self._max_concurrent = max_concurrent
         self._iter_num = 0
 
-    
     def _trials_by_state(self, state: str) -> list[TrialInfo]:
         return [t for t in self._trials.values() if t.state == state]
 
@@ -280,6 +274,15 @@ class SoFASearch(Searcher):
         return True
 
     def _normalize(self, config: dict) -> dict:
+        """
+        Normalize a configuration dictionary based on the search space bounds.
+
+        Args:
+            config (dict): The configuration with raw parameter values.
+
+        Returns:
+            dict: The configuration with normalized values in [-1, 1].
+        """
         normalized = {}
         for param, value in config.items():
             if param not in self._space:
@@ -311,6 +314,15 @@ class SoFASearch(Searcher):
         return normalized
 
     def _denormalize(self, normalized_config: dict) -> dict:
+        """
+        Denormalize a configuration dictionary based on the search space bounds.
+
+        Args:
+            normalized_config (dict): The configuration with values in [-1, 1].
+
+        Returns:
+            dict: The configuration with denormalized values.
+        """
         denormalized = {}
         for param, norm_val in normalized_config.items():
             if param not in self._space:
@@ -401,7 +413,7 @@ class SoFASearch(Searcher):
 
         ids_scores = [(t.trial_id, t.score) for t in self._trials.values()
                       if t.score is not None]
-        
+
         if len(ids_scores) == 0:
             return {}
 
@@ -467,13 +479,13 @@ class SoFASearch(Searcher):
 
     def suggest(self, trial_id: str) -> Optional[dict]:
         """Suggest a new configuration to try."""
-        
+
         running_cnt = len(self._trials_by_state(TrialState.RUNNING))
 
         if (self._max_concurrent > 0 and running_cnt >= self._max_concurrent):
             # print(f"AAA CANT SUGGEST: {running_cnt} >= {self._max_population_size}")
             return None
-        
+
         # if running_cnt >= self._max_population_size:
         #     # print(f"CANT SUGGEST: {running_cnt} >= {self._max_population_size}")
         #     return None
@@ -489,7 +501,7 @@ class SoFASearch(Searcher):
                 new_config = self._points_to_evaluate.pop(0)
             else:
                 new_config = self._sample_new_config()
-        
+
         else:
 
             self._iter_num += 1
@@ -499,7 +511,7 @@ class SoFASearch(Searcher):
 
             if len(selection_probs) == 0:
                 return None
-            
+
             # print("NEW SUGGESTION, ITER:", self._iter_num)
 
             # Get reference configuration
@@ -519,7 +531,7 @@ class SoFASearch(Searcher):
 
         # print("ID:", trial_id, "TRIALS CNT:", len(self._trials))
 
-        self._trials[trial_id] = TrialInfo(trial_id, new_config, 
+        self._trials[trial_id] = TrialInfo(trial_id, new_config,
                                            None, TrialState.RUNNING)
 
         return new_config
@@ -558,7 +570,7 @@ class SoFASearch(Searcher):
         score = result.get(self._metric)
         if score is None:
             return
-        
+
         # print("TRIAL COMPLETED. COUNT OF COMPLETED:", len(self._trials_by_state(TrialState.COMPLETED)))
 
         self._trials[trial_id].state = TrialState.COMPLETED
@@ -581,12 +593,14 @@ class SoFASearch(Searcher):
 
         if len(completed) == 0 or len(completed) < self._max_population_size:
             return
-        
+
         if self._mode == "max":
-            worst_trials = heapq.nsmallest(self._removal_cnt, completed, key=lambda t: t.score)
+            worst_trials = heapq.nsmallest(
+                self._removal_cnt, completed, key=lambda t: t.score)
         else:
             # For minimization, use max-heap by inverting scores
-            worst_trials = heapq.nlargest(self._removal_cnt, completed, key=lambda t: t.score)
+            worst_trials = heapq.nlargest(
+                self._removal_cnt, completed, key=lambda t: t.score)
 
         for worst in worst_trials:
             self._trials.pop(worst.trial_id, None)
