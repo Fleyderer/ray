@@ -1,5 +1,6 @@
 import logging
-from typing import Optional, Union
+import heapq
+from typing import Optional, Union, Callable
 
 import numpy as np
 
@@ -63,12 +64,11 @@ class SoFASearch(Searcher):
         mode: str = "max",
         initial_population_size: int = 10,
         max_population_size: int = 100,
-        max_iter_num: int = 1000,
+        removal_ratio: float = 0.1,
         mutation_rate: Union[float, tuple[float, float]] = (0.5, 1.0),
         cross_over_rate: Union[float, tuple[float, float]] = (0.5, 1.0),
-        distance_eps: float = 1e-4,
-        use_lambda: bool = True,
-        use_epsilon: bool = True,
+        lambda_fn: Callable = lambda t: 1.0,
+        epsilon_fn: Callable = lambda t: 1.0,
         use_mutation: bool = True,
         categorical_types: dict[str, str] = None,
         points_to_evaluate: Optional[list[dict]] = None,
@@ -82,9 +82,10 @@ class SoFASearch(Searcher):
             mutation_rate: The probability of mutating an individual.
             cross_over_rate: The probability of crossing over two individuals. 
                 Used for nominal categorical parameters.
-            distance_eps: The minimum distance between two individuals.
-            use_lambda: Whether to use the lambda parameter.
-            use_epsilon: Whether to use the epsilon parameter.
+            lambda_fn: A function that returns the lambda value, based on the
+                current iteration.
+            epsilon_fn: A function that returns the epsilon value, based on the
+                current iteration.
             use_mutation: Whether to use mutation.
             categorical_types: A dictionary mapping parameter 
                 names to categorical types: 'nominal' or 'ordinal'.
@@ -93,16 +94,18 @@ class SoFASearch(Searcher):
             max_concurrent: The maximum number of concurrent trials.
         """
 
-        assert mode in [
-            "min", "max"], f"`mode` must be 'min' or 'max', got '{mode}'"
+        assert mode in ["min", "max"], \
+            f"`mode` must be 'min' or 'max', got '{mode}'"
+        
+        assert removal_ratio < 1.0, \
+            f"`removal_ratio` must be < 1.0, got {removal_ratio}"
 
         super(SoFASearch, self).__init__(metric=metric, mode=mode)
         self._max_population_size = max_population_size
+        self._removal_cnt = round(self._max_population_size * removal_ratio)
         self._population_to_initialize = initial_population_size
-        self._max_iter_num = max_iter_num
-        self._distance_eps = distance_eps
-        self._use_lambda = use_lambda
-        self._use_epsilon = use_epsilon
+        self._lambda_fn = lambda_fn
+        self._epsilon_fn = epsilon_fn
         self._use_mutation = use_mutation
         self._categorical_types = categorical_types or {}
         self._original_space = space or {}
@@ -388,21 +391,13 @@ class SoFASearch(Searcher):
                     trial_ids,
                     p=trial_probs
                 )
-                mutated_config[key] = self._trials[trial_id][key]
+                mutated_config[key] = self._trials[trial_id].config[key]
 
         return self._denormalize(mutated_config)
 
-    def _calculate_epsilon(self) -> float:
-        """Calculate epsilon sequence value."""
-        return max(0.1, 1 - self._iter_num / self._max_iter_num)
-
-    def _calculate_lambda(self) -> float:
-        """Calculate adaptive lambda parameter."""
-        return (np.sqrt(self._iter_num / 100) + 1)
-
     def _calculate_selection_probabilities(self) -> dict:
         """Calculate selection probabilities using SoFA formula."""
-        lambda_val = self._calculate_lambda() if self._use_lambda else 1
+        lambda_val = self._lambda_fn(self._iter_num)
 
         ids_scores = [(t.trial_id, t.score) for t in self._trials.values()
                       if t.score is not None]
@@ -436,7 +431,9 @@ class SoFASearch(Searcher):
         """Generate new config using SoFA's probability distribution."""
         normalized_ref = self._normalize(reference_config)
 
-        epsilon = self._calculate_epsilon() if self._use_epsilon else 1
+        epsilon = self._epsilon_fn(self._iter_num)
+
+        print(f"CURRENT EPSILON: {epsilon}")
 
         keys = [key for key in normalized_ref.keys() if self._is_normalizing(key)]
         values = np.array([normalized_ref[key] for key in keys], dtype=float)
@@ -556,7 +553,6 @@ class SoFASearch(Searcher):
         """Handle completed trial result."""
         if error or result is None:
             self._trials.pop(trial_id, None)
-            self._trials.pop(trial_id, None)
             return
 
         score = result.get(self._metric)
@@ -587,8 +583,10 @@ class SoFASearch(Searcher):
             return
         
         if self._mode == "max":
-            worst = min(completed, key=lambda t: t.score)
-        elif self._mode == "min":
-            worst = max(completed, key=lambda t: t.score)
+            worst_trials = heapq.nsmallest(self._removal_cnt, completed, key=lambda t: t.score)
+        else:
+            # For minimization, use max-heap by inverting scores
+            worst_trials = heapq.nlargest(self._removal_cnt, completed, key=lambda t: t.score)
 
-        self._trials.pop(worst.trial_id, None)
+        for worst in worst_trials:
+            self._trials.pop(worst.trial_id, None)
