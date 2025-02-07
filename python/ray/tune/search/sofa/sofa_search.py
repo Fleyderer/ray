@@ -445,8 +445,6 @@ class SoFASearch(Searcher):
 
         epsilon = self._epsilon_fn(self._iter_num)
 
-        print(f"CURRENT EPSILON: {epsilon}")
-
         keys = [key for key in normalized_ref.keys() if self._is_normalizing(key)]
         values = np.array([normalized_ref[key] for key in keys], dtype=float)
 
