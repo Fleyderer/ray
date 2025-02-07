@@ -5,8 +5,6 @@ from typing import Optional, Union, Callable
 import numpy as np
 
 from ray.tune.search import (
-    UNDEFINED_METRIC_MODE,
-    UNDEFINED_SEARCH_SPACE,
     UNRESOLVED_SEARCH_SPACE,
     Searcher,
 )
