@@ -478,17 +478,10 @@ class SoFASearch(Searcher):
         running_cnt = len(self._trials_by_state(TrialState.RUNNING))
 
         if (self._max_concurrent > 0 and running_cnt >= self._max_concurrent):
-            # print(f"AAA CANT SUGGEST: {running_cnt} >= {self._max_population_size}")
             return None
-
-        # if running_cnt >= self._max_population_size:
-        #     # print(f"CANT SUGGEST: {running_cnt} >= {self._max_population_size}")
-        #     return None
 
         # Create config for initial population
         if self._population_to_initialize > 0:
-
-            # print("INITIALIZE PENDING:", self._population_to_initialize)
 
             self._population_to_initialize -= 1
 
@@ -507,8 +500,6 @@ class SoFASearch(Searcher):
             if len(selection_probs) == 0:
                 return None
 
-            # print("NEW SUGGESTION, ITER:", self._iter_num)
-
             # Get reference configuration
             reference_config = None
             if self._use_mutation and self._best_trial.score is not None:
@@ -523,8 +514,6 @@ class SoFASearch(Searcher):
 
             # Generate new configuration
             new_config = self._generate_new_config(reference_config)
-
-        # print("ID:", trial_id, "TRIALS CNT:", len(self._trials))
 
         self._trials[trial_id] = TrialInfo(trial_id, new_config,
                                            None, TrialState.RUNNING)
@@ -565,8 +554,6 @@ class SoFASearch(Searcher):
         score = result.get(self._metric)
         if score is None:
             return
-
-        # print("TRIAL COMPLETED. COUNT OF COMPLETED:", len(self._trials_by_state(TrialState.COMPLETED)))
 
         self._trials[trial_id].state = TrialState.COMPLETED
         self._trials[trial_id].score = score
