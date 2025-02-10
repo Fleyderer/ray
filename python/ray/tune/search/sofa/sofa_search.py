@@ -333,7 +333,6 @@ class SoFASearch(Searcher):
             # Handle numerical parameters
             if isinstance(domain, (Float, Integer)):
                 original_val = (norm_val + 1.0) * (upper - lower) / 2.0 + lower
-                original_val = np.clip(original_val, lower, upper)
                 if isinstance(domain, Integer):
                     original_val = int(np.round(original_val))
                 denormalized[param] = original_val
